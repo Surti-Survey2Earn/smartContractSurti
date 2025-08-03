@@ -1,146 +1,80 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
-import "forge-std/Test.sol";
-import "../src/Survey.sol";
-import "../src/SurveyFactory.sol";
-
 contract SurveyFactoryTest is Test {
-    SurveyFactory public factory;
-    address public creator = address(1);
-    address public respondent = address(2);
+    SurveyFactory factory;
+    SurveyNFT nft;
+    DummyToken token;
+
+    address owner = address(this);
+    address user = address(0xABCD);
 
     function setUp() public {
-        factory = new SurveyFactory();
-        vm.deal(creator, 10 ether);
-        vm.deal(respondent, 10 ether);
-    }
+        token = new DummyToken();
+        nft = new SurveyNFT(owner);
+        factory = new SurveyFactory(address(token), address(nft), owner);
 
-    function createSampleSurvey() internal returns (Survey) {
-        vm.startPrank(creator);
-        uint256 rewardPerResponse = 0.1 ether;
-        uint256 maxResponses = 5;
-        uint256 totalReward = rewardPerResponse * maxResponses;
-
-        factory.createSurvey{value: totalReward}(
-            "Judul Survei",
-            "Deskripsi",
-            rewardPerResponse,
-            maxResponses
-        );
-
-        address[] memory surveys = factory.getAllSurveys();
-        vm.stopPrank();
-        return Survey(payable(surveys[0]));
+        // Transfer token to factory (simulasi fund reward)
+        token.transfer(address(factory), 100 ether);
     }
 
     function testCreateSurvey() public {
-        vm.startPrank(creator);
-
-        uint256 rewardPerResponse = 0.1 ether;
-        uint256 maxResponses = 5;
-        uint256 totalReward = rewardPerResponse * maxResponses;
-
-        factory.createSurvey{value: totalReward}(
-            "Judul Survei",
-            "Deskripsi",
-            rewardPerResponse,
-            maxResponses
-        );
-
-        address[] memory surveys = factory.getAllSurveys();
-        assertEq(surveys.length, 1);
-
-        Survey survey = Survey(payable(surveys[0]));
-        assertEq(survey.title(), "Judul Survei");
-        assertEq(survey.creator(), creator);
-
-        vm.stopPrank();
+        factory.createSurvey(10, 5, 1 ether);
+        (address creator,, uint256 reward,,,) = factory.surveys(0);
+        assertEq(creator, owner);
+        assertEq(reward, 1 ether);
     }
 
-    function testSubmitResponseAndClaimReward() public {
-        Survey survey = createSampleSurvey();
+    function testSubmitSurveyAndClaimReward() public {
+        factory.createSurvey(10, 5, 1 ether);
 
-        vm.startPrank(respondent);
-        survey.submitResponse("hashed-answer");
+        // Simulate user submitting the survey
+        vm.prank(user); // run as user
+        factory.submitSurvey(0);
 
-        // Pastikan sudah submit
-        (address respAddr,, bool rewarded) = survey.responses(respondent);
-        assertEq(respAddr, respondent);
-        assertEq(rewarded, false);
+        // XP & level calculated
+        (, , , , , uint256 level) = factory.userProgress(0, user);
+        assertEq(level, 0); // 5 * 10 XP = 50 XP → belum naik level (naik kalau 100 XP)
 
-        // Klaim reward
-        uint256 before = respondent.balance;
-        survey.claimReward();
-        uint256 afterClaim = respondent.balance;
+        // User claim reward
+        vm.prank(user);
+        factory.claimReward(0, "ipfs://sample-nft-uri");
 
-        assertGt(afterClaim, before);
-        vm.stopPrank();
+        // Check if user received 5 ether (rewardPerQuestion * 5)
+        uint256 userBalance = token.balanceOf(user);
+        assertEq(userBalance, 5 ether); // no bonus karena level 0
     }
 
-    function testCannotSubmitTwice() public {
-        Survey survey = createSampleSurvey();
+    function testLevelBonusApplied() public {
+        factory.createSurvey(10, 10, 1 ether); // 10 * 10 XP = 100 XP → level 1
 
-        vm.startPrank(respondent);
-        survey.submitResponse("hash1");
-        vm.expectRevert("Already responded");
-        survey.submitResponse("hash2");
-        vm.stopPrank();
+        vm.prank(user);
+        factory.submitSurvey(0);
+
+        (, , , , uint256 level) = factory.userProgress(0, user);
+        assertEq(level, 1); // Should level up
+
+        vm.prank(user);
+        factory.claimReward(0, "ipfs://bonus-nft");
+
+        uint256 expectedReward = 10 ether + (10 ether / 10); // 10 + 1 = 11
+        assertEq(token.balanceOf(user), expectedReward);
     }
 
-    function testCannotExceedMaxResponses() public {
-        vm.startPrank(creator);
-        factory.createSurvey{value: 0.1 ether}(
-            "Survey",
-            "Test",
-            0.1 ether,
-            1
-        );
-        Survey survey = Survey(payable(factory.getAllSurveys()[0]));
-        vm.stopPrank();
+    function testCannotDoubleSubmitOrClaim() public {
+        factory.createSurvey(10, 5, 1 ether);
 
-        vm.startPrank(respondent);
-        survey.submitResponse("hash");
-        vm.stopPrank();
+        vm.prank(user);
+        factory.submitSurvey(0);
 
-        address anotherUser = address(3);
-        vm.deal(anotherUser, 1 ether);
-        vm.startPrank(anotherUser);
-        vm.expectRevert("Survey full");
-        survey.submitResponse("other");
-        vm.stopPrank();
-    }
+        // Try to resubmit
+        vm.prank(user);
+        vm.expectRevert("Already submitted");
+        factory.submitSurvey(0);
 
-    function testCannotClaimTwice() public {
-        Survey survey = createSampleSurvey();
+        vm.prank(user);
+        factory.claimReward(0, "ipfs://nft");
 
-        vm.startPrank(respondent);
-        survey.submitResponse("hash");
-        survey.claimReward();
-
+        // Try to claim again
+        vm.prank(user);
         vm.expectRevert("Already claimed");
-        survey.claimReward();
-        vm.stopPrank();
-    }
-
-    function testClaimWithoutSubmitFails() public {
-        Survey survey = createSampleSurvey();
-
-        address nonRespondent = address(4);
-        vm.deal(nonRespondent, 1 ether);
-        vm.startPrank(nonRespondent);
-
-        vm.expectRevert("No response");
-        survey.claimReward();
-        vm.stopPrank();
-    }
-
-    function testCreatorCannotSubmit() public {
-        Survey survey = createSampleSurvey();
-
-        vm.startPrank(creator);
-        vm.expectRevert("Creator cannot submit");
-        survey.submitResponse("invalid");
-        vm.stopPrank();
+        factory.claimReward(0, "ipfs://nft");
     }
 }

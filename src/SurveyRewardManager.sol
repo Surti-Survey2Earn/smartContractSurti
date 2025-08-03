@@ -14,7 +14,8 @@ contract SurveyRewardManager is ERC721URIStorage, Ownable {
 
     mapping(address => UserProfile) public userProfiles;
 
-    constructor() ERC721("SurveyCompletionNFT", "SCN") {}
+    constructor(address initialOwner) ERC721("SurveyCompletionNFT", "SCN") Ownable(initialOwner) {}
+
 
     function awardNFT(address user, string memory tokenURI) external onlyOwner {
         uint256 newTokenId = tokenIdCounter++;

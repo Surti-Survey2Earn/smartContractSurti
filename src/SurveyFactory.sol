@@ -2,22 +2,8 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "./SurveyNFT.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-
-contract SurveyNFT is ERC721URIStorage, Ownable {
-    uint256 public nextTokenId;
-
-    constructor() ERC721("SurveyCompletionNFT", "SCNFT") {}
-
-    function mint(address to, string memory uri) external onlyOwner returns (uint256) {
-        uint256 tokenId = nextTokenId;
-        _safeMint(to, tokenId);
-        _setTokenURI(tokenId, uri);
-        nextTokenId++;
-        return tokenId;
-    }
-}
 
 contract SurveyFactory is Ownable {
     struct Survey {
@@ -50,11 +36,12 @@ contract SurveyFactory is Ownable {
     event SurveySubmitted(uint256 indexed surveyId, address user, uint256 xpEarned);
     event RewardClaimed(uint256 indexed surveyId, address user, uint256 reward);
 
-    constructor(address _token, address _nft) {
-        rewardToken = IERC20(_token);
-        nftContract = SurveyNFT(_nft);
-    }
-
+    constructor(address _token, address _nft, address initialOwner)
+    Ownable(initialOwner)
+{
+    rewardToken = IERC20(_token);
+    nftContract = SurveyNFT(_nft);
+}
     function createSurvey(uint256 maxResponses, uint256 questionCount, uint256 rewardPerQuestion) external {
         surveys[surveyCount] = Survey({
             creator: msg.sender,
@@ -82,7 +69,6 @@ contract SurveyFactory is Ownable {
         uint256 earnedXp = s.questionCount * baseXpPerQuestion;
         userProgress[surveyId][msg.sender].xp += earnedXp;
 
-        // Level up
         uint256 currentLevel = userProgress[surveyId][msg.sender].level;
         uint256 totalXp = userProgress[surveyId][msg.sender].xp;
         uint256 newLevel = totalXp / xpPerLevel;
@@ -100,14 +86,12 @@ contract SurveyFactory is Ownable {
         require(progress.submitted, "You must submit first");
         require(!progress.claimed, "Already claimed");
 
-        // Hitung reward berdasarkan jumlah pertanyaan dan level
         uint256 baseReward = s.rewardPerQuestion * s.questionCount;
-        uint256 bonus = (progress.level * baseReward) / 10; // 10% per level
+        uint256 bonus = (progress.level * baseReward) / 10;
         uint256 totalReward = baseReward + bonus;
 
         require(rewardToken.transfer(msg.sender, totalReward), "Reward failed");
 
-        // Mint NFT
         nftContract.mint(msg.sender, nftUri);
 
         progress.claimed = true;
